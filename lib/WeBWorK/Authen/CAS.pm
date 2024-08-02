@@ -26,6 +26,20 @@ use WeBWorK::Debug;
 #$WeBWorK::Debug::Logfile = "/opt/webwork/webwork2/logs/cas-debug.log";
 #$WeBWorK::Debug::AllowSubroutineOutput = "get_credentials";
 
+# Warden: This sub needs to be duplicated from Authen.pm
+sub trim {  # used to trim leading and trailing white space from user_id and password
+            # in get_credentials
+  my $s = shift;
+  # If the value was NOT defined, we want to leave it undefined, so
+  # we can still catch session-timeouts and report them properly.
+  # Thus we only do the following substitution if $s is defined.
+  # Otherwise return the undefined value so a non-defined password
+  # can be caught later by authenticate() for the case of a
+  # session-timeout.
+  $s =~ s/(^\s+|\s+$)//g    if ( defined($s) );
+  return $s;
+}
+
 sub get_credentials {
 	my $self = shift;
 	my $r = $self->{r};
@@ -47,6 +61,28 @@ sub get_credentials {
 		return $self->SUPER::get_credentials(@_);
 	}
 
+	# Warden: Check for valid Webwork session cookie before redirecting to CAS.
+	my ($cookieUser, $cookieKey, $cookieTimeStamp) = $self->fetchCookie;
+	if (defined $cookieUser and (defined $r->param("user") || defined $r->param("effectiveUser"))) {
+		my $requestUser = $r->param("user") || $r->param("effectiveUser");
+		if ($cookieUser ne $requestUser) {
+			#croak ("cookieUser = $cookieUser and paramUser = ". $r->param("user") . " are different.");
+			$self->maybe_kill_cookie; # use parameter "user" rather than cookie "user";
+		}
+		if (defined $cookieKey) {
+			$self->{user_id} = $cookieUser;
+			$self->{session_key} = $cookieKey;
+			$self->{cookie_timestamp} = $cookieTimeStamp;
+			$self->{login_type} = "normal";
+			$self->{credential_source} = "cookie";
+			$self->{user_id}     = trim($self->{user_id});
+			debug(  "cookie user '", $self->{user_id},
+				"' key '", $self->{session_key},
+				"' cookie_timestamp '", $self->{cookieTimeStamp}, "' "
+			);
+			return 1;
+		}
+	}
 	# if we come in with a user_id, then we've already authenticated
 	#    through the CAS.  So just check the provided user and session key.
 	if (defined $r->param('key') && defined $r->param('user')) {
